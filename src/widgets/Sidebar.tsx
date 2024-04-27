@@ -1,10 +1,20 @@
-import {Button, Chip, Select, SelectItem} from "@nextui-org/react";
-import {useCallback, useMemo, useState} from "react";
+import {
+    Button,
+    Chip,
+    DateRangePicker,
+    DateValue,
+    Input,
+    RangeValue,
+    Select,
+    SelectItem,
+    Slider
+} from "@nextui-org/react";
+import {Dispatch, SetStateAction, useCallback, useMemo, useState} from "react";
 import {useDropzone} from "react-dropzone";
 import {read, utils} from 'xlsx';
-import {IData} from "./Chart";
+import {IData} from "./CandleChart";
 import {Key} from "@react-types/shared";
-
+import {parseDate} from "@internationalized/date";
 
 export interface ITicker {
     id: number
@@ -14,18 +24,24 @@ export interface ITicker {
 export interface IProps {
     onChangeSMA: (smaPeriod: number) => void
     onChangeData: (data: { [key: string]: IData[] }) => void
-    onChangeSelection: React.Dispatch<React.SetStateAction<{ [p: number]: ITicker[] }>>
+    onChangeSelection: Dispatch<SetStateAction<{ [p: number]: ITicker[] }>>
+    onSetGroupNames: Dispatch<SetStateAction<{ [p: number]: string }>>
+    onDatesChange: Dispatch<SetStateAction<RangeValue<DateValue>>>
+    dateRange: RangeValue<DateValue>
+    onSetKeys: Dispatch<SetStateAction<ITicker[]>>
     smaPeriod: number
 }
 
-const GroupSelector = ({data, items, group, onChangeSelection}: {
+const GroupSelector = ({data, items, group, onChangeSelection, onSetGroupNames}: {
     items: ITicker[],
     group: number,
     data: { [key: string]: IData[] },
+    onSetGroupNames: Dispatch<SetStateAction<{ [p: number]: string }>>
     onChangeSelection: (key: number, value: ITicker[]) => void
 }) => {
     const [selection, setSelection] = useState<"all" | Iterable<Key> | undefined>();
     const [selectedItems, setSelectedItems] = useState<ITicker[]>([]);
+    const [groupName, setGroupName] = useState("");
     const stats = useMemo(() => {
         const chartData = selectedItems.map(({name}) => {
             return data[name];
@@ -67,8 +83,17 @@ const GroupSelector = ({data, items, group, onChangeSelection}: {
             avg: sum / count,
         };
     }, [selection])
-    return <div>
+    return <div className={"flex flex-col gap-2"}>
+        <Input label={"Название группы"}
+               color={"primary"}
+               variant={"bordered"}
+               value={groupName}
+               onValueChange={(value) => {
+                   setGroupName(value);
+                   onSetGroupNames(prevState => ({...prevState, [group]: value}));
+               }}/>
         <Select
+            color={"primary"}
             aria-label={"ticker-select"}
             items={items}
             variant="bordered"
@@ -128,17 +153,26 @@ const GroupSelector = ({data, items, group, onChangeSelection}: {
     </div>
 }
 
-export const Sidebar = ({onChangeSMA, smaPeriod, onChangeData, onChangeSelection}: IProps) => {
+export const Sidebar = ({
+                            onChangeSMA,
+                            smaPeriod,
+                            onChangeData,
+                            onChangeSelection,
+                            onSetKeys,
+                            onSetGroupNames,
+                            onDatesChange,
+                        }: IProps) => {
     const [data, setData] = useState<{ [key: string]: IData[] }>({})
     const [keys, setKeys] = useState<ITicker[]>([]);
     const [groups, setGroups] = useState<number[]>([0]);
     const [groupCounts, setGroupCounts] = useState<number>(0);
     const [filename, setFilename] = useState<string>("");
     const [fileError, setFileError] = useState<string>("");
+    const [fileDateRange, setFileDateRange] = useState<{ min: Date, max: Date }>();
     const onDrop = useCallback(async (acceptedFiles: File[]) => {
         const file = acceptedFiles[0];
         if (!file) return;
-        if (file.type !== "text/csv") return setFileError("Загрузите .csv файл");
+        if (!file.name.endsWith(".csv")) return setFileError("Загрузите .csv файл");
         setFileError("");
         const wb = read(await file.arrayBuffer(), {cellNF: true});
         const data = utils.sheet_to_json(wb.Sheets['Sheet1'], {header: 1});
@@ -151,15 +185,29 @@ export const Sidebar = ({onChangeSMA, smaPeriod, onChangeData, onChangeSelection
         setKeys(
             tickers
         );
+        onSetKeys(tickers);
+        let min = Infinity;
+        let max = 0;
         const entries = keys.map(() => new Array<string[]>());
         data.slice(1, data.length).forEach((item) => {
             const row = item as string[];
-            const t = new Date(row[0]).toISOString().split('T')[0];
+            const currentDate = new Date(row[0]);
+            min = Math.min(currentDate.valueOf(), min);
+            max = Math.max(currentDate.valueOf(), max);
+            const t = currentDate.toISOString().split('T')[0];
             row.slice(1, row.length)
                 .forEach((value, index) => {
                     entries[index].push([t, value.toString()]);
                 });
         });
+        setFileDateRange({
+            min: new Date(min),
+            max: new Date(max),
+        });
+        onDatesChange({
+            start: parseDate(new Date(min).toISOString().split('T')[0]),
+            end: parseDate(new Date(max).toISOString().split('T')[0]),
+        })
         const result: { [key: string]: IData[] } = {};
         entries.forEach((values, index) => {
             result[keys[index]] = values.map(([key, value]) => ({
@@ -170,11 +218,10 @@ export const Sidebar = ({onChangeSMA, smaPeriod, onChangeData, onChangeSelection
         onChangeData(result);
         setData(result);
         setFilename(file.name);
-    }, [onChangeData, onChangeSelection])
+    }, [onSetKeys, onChangeData])
     const {getRootProps, getInputProps, isDragActive} = useDropzone({onDrop});
     const isFileError = useMemo(() => fileError !== "", [fileError]);
-
-    return (<div className={"col-span-1 flex flex-col gap-4"}>
+    return (<div className={"col-span-1 flex flex-col gap-4 max-w-[300px]"}>
         <div {...getRootProps()}
              className={`h-20 w-full flex items-center justify-center text-center align-middle border-2 cursor-pointer ${isFileError ? "border-red-300" : "border-gray-300"} rounded-xl border-dashed`}>
             <input {...getInputProps()} />
@@ -193,14 +240,49 @@ export const Sidebar = ({onChangeSMA, smaPeriod, onChangeData, onChangeSelection
                     <p>{filename === "" ? isFileError ? fileError : "Переместите .csv файл сюда или кликните на текст" : filename}</p>
             }
         </div>
+        {fileDateRange && <div className={"text-sm font-light px-1"}>
+            Даты: {fileDateRange.min.toISOString().split('T')[0]} - {fileDateRange.max.toISOString().split('T')[0]}
+        </div>}
+        <DateRangePicker
+            onChange={onDatesChange}
+            onOpenChange={() => {
+                console.log("afa")
+            }}
+            value={fileDateRange && {
+                start: parseDate(fileDateRange.min.toISOString().split('T')[0]),
+                end: parseDate(fileDateRange.max.toISOString().split('T')[0])
+            }}
+            maxValue={fileDateRange && parseDate(fileDateRange.max.toISOString().split('T')[0])}
+            minValue={fileDateRange && parseDate(fileDateRange.min.toISOString().split('T')[0])}
+            variant={"bordered"}
+            color={"primary"}
+            label="Диапазон дат"
+            hideTimeZone={true}
+            visibleMonths={2}
+        />
+        <Slider
+            color={"primary"}
+            label="Период скользящего среднего"
+            aria-label={"SMA period"}
+            step={1}
+            maxValue={50}
+            minValue={2}
+            onChange={(value) => {
+                if (typeof value === "number")
+                    onChangeSMA(value);
+            }}
+            defaultValue={smaPeriod}
+            className="max-w-md"
+        />
 
         {groups.map((group) => {
-            return <GroupSelector data={data} group={group} items={keys} onChangeSelection={(key, value) => {
-                onChangeSelection(prevState => ({
-                    ...prevState,
-                    [key]: value
-                }));
-            }}/>
+            return <GroupSelector data={data} group={group} items={keys} onSetGroupNames={onSetGroupNames}
+                                  onChangeSelection={(key, value) => {
+                                      onChangeSelection(prevState => ({
+                                          ...Object.fromEntries(Object.entries(prevState)),
+                                          [key]: value
+                                      }));
+                                  }}/>
         })}
 
         <Button color={"primary"} onClick={() => {

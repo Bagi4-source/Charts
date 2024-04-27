@@ -1,12 +1,15 @@
 import {createChart} from 'lightweight-charts';
 import {useCallback, useEffect, useMemo, useRef} from "react";
 import {ITicker} from "./Sidebar";
+import {Chip, DateValue, RangeValue} from "@nextui-org/react";
 
 interface IChart {
     height: number
     smaPeriod: number
     data: { [key: string]: IData[] }
     groups: { [key: string]: ITicker[] }
+    groupNames: { [key: string]: string}
+    dateRange: RangeValue<DateValue>
 }
 
 export interface IData {
@@ -65,7 +68,8 @@ const colors = [
     {r: 220, g: 105, b: 70}
 ];
 
-export const Chart = ({height, smaPeriod, data, groups}: IChart) => {
+export const CandleChart = ({height, smaPeriod, data, groups, groupNames, dateRange}: IChart) => {
+    const dateValueConvertToDate = (dateValue: DateValue) => new Date(dateValue.year, dateValue.month - 1, dateValue.day);
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const calculateSMA = useCallback((data: IData[]) => {
         const avg = function (part: IData[]) {
@@ -96,7 +100,23 @@ export const Chart = ({height, smaPeriod, data, groups}: IChart) => {
             })
         })
         return result;
-    }, [])
+    }, []);
+
+    const dateRangeTimestamp = useMemo<[number, number]>(() => {
+        return [dateValueConvertToDate(dateRange.start).valueOf(), dateValueConvertToDate(dateRange.end).valueOf()]
+    }, [dateRange])
+
+    const targetData = useMemo<{[key: string]: IData[]}>(() => {
+        const [start, end] = dateRangeTimestamp;
+        const result = Object.entries(data).map(([key, value]) => {
+            const newData = value.filter((item) => {
+                const keyDate = new Date(item.time).valueOf();
+                return (keyDate >= start && keyDate <= end);
+            });
+            return [key, newData];
+        })
+        return Object.fromEntries(result);
+    }, [data, dateRangeTimestamp])
 
     useEffect(() => {
         if (!chartContainerRef.current) return;
@@ -126,27 +146,42 @@ export const Chart = ({height, smaPeriod, data, groups}: IChart) => {
         });
         const candleSeries = chart.addCandlestickSeries({});
         const chartData = [];
+        let i = 0;
         for (const [group, tickers] of Object.entries(groups)) {
-            const day = (parseInt(group) + 1).toString().padStart(2, "0");
+            const day = (i + 1).toString().padStart(2, "0");
             const values = tickers.map(({name}) => {
-                return data[name];
-            })
-            const color = colors[parseInt(group)] ?? {
+                return targetData[name];
+            });
+            console.log(values)
+            const color = colors[i] ?? {
                 r: Math.ceil(Math.random() * 255),
                 g: Math.ceil(Math.random() * 255),
                 b: Math.ceil(Math.random() * 255),
             };
+            i++;
             const {r, g, b} = color;
             if (values.length === 0 || values[0].length === 0) continue;
             let min = values[0][0].value;
             let max = values[0][0].value;
+            let sum = 0;
+            let count = 0;
             values.forEach(item => {
                 item.forEach(({value}) => {
                     min = Math.min(value, min);
                     max = Math.max(value, max);
+                    sum += value;
+                    count++;
                 })
+            });
+            const avg = sum / count;
+            chartData.push({
+                low: min,
+                close: avg * 1.01,
+                open: avg * 0.99,
+                high: max,
+                time: `2000-01-${day}`,
+                color: `rgb(${r},${g},${b})`,
             })
-            chartData.push({ open: min, high: max, low: min, close: max, time: `2000-01-${day}`, color: `rgb(${r},${g},${b})`, })
         }
         candleSeries.setData(chartData);
 
@@ -163,9 +198,28 @@ export const Chart = ({height, smaPeriod, data, groups}: IChart) => {
 
             chart.remove();
         };
-    }, [calculateSMA, height, data, groups, calculateDispersion]);
+    }, [calculateSMA, height, targetData, groups, calculateDispersion]);
+
     return (
-        <div ref={chartContainerRef} className={"col-span-3 relative"}>
+        <div className={"flex flex-col gap-2"}>
+            <div className={"text-2xl"}>
+                График по группам
+            </div>
+            <div ref={chartContainerRef} className={"relative"}>
+            </div>
+            <div className={"flex gap-2"}>
+                {Object.entries(groups).map(([key, value], index) => {
+                    const color = colors[index] ?? {
+                        r: Math.ceil(Math.random() * 255),
+                        g: Math.ceil(Math.random() * 255),
+                        b: Math.ceil(Math.random() * 255),
+                    };
+                    const {r, g, b} = color;
+                    return <Chip key={index}
+                                 className={"text-white"}
+                                 style={{backgroundColor: `rgb(${r},${g},${b})`}}>{groupNames[key]}</Chip>
+                })}
+            </div>
         </div>
     )
 }
