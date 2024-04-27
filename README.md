@@ -8,3 +8,8 @@ npm i
 ```shell
 npm run dev
 ```
+
+## Сборка
+```shell
+npm run build
+```
